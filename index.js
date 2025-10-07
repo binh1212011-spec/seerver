@@ -1,22 +1,6 @@
-// ========================
-// 🌐 KEEP ALIVE SERVER
-// ========================
-const express = require("express");
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get("/", (req, res) => res.send("✅ Bot is alive!"));
-app.listen(PORT, () => console.log(`🌐 KeepAlive running on port ${PORT}`));
-
-// ========================
-// 🤖 DISCORD BOT
-// ========================
-const {
-  Client,
-  GatewayIntentBits,
-  Partials
-} = require("discord.js");
 require("dotenv").config();
+const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
+const express = require("express");
 
 const client = new Client({
   intents: [
@@ -26,125 +10,119 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildPresences
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Message, Partials.Channel, Partials.GuildMember]
 });
 
-// ========================
-// ⚙️ ENV CONFIG
-// ========================
-const TOKEN = process.env.TOKEN;
-const GUILD_ID = process.env.GUILD_ID;
-const MONITOR_CHANNEL_ID = process.env.MONITOR_CHANNEL_ID;
-const EXCLUDED_ROLE_ID = process.env.EXCLUDED_ROLE_ID;
-const CH_ALL = process.env.CH_ALL;
-const CH_MEMBERS = process.env.CH_MEMBERS;
-const CH_ONLINE = process.env.CH_ONLINE;
-const CH_SERVER = process.env.CH_SERVER;
+// === KEEP ALIVE (dành cho hosting free) ===
+const app = express();
+app.get("/", (req, res) => res.send("✅ Bot is running!"));
+app.listen(process.env.PORT || 3000, () => console.log("🌐 Keep-alive active"));
 
-// ========================
-// 🧩 STATE STORAGE
-// ========================
-let messageLog = [];
-let lastCheck = Date.now();
+// === ENV ===
+const {
+  TOKEN,
+  GUILD_ID,
+  MONITOR_CHANNEL_ID,
+  EXCLUDED_ROLE_ID,
+  CH_ALL,
+  CH_MEMBERS,
+  CH_ONLINE,
+  CH_SERVER
+} = process.env;
 
-// ========================
-// 🚀 BOT READY
-// ========================
+// === STATE ===
+let monitorCount = 0;
+let lastActive = Date.now();
+
+// === FUNCTIONS ===
+async function updateAllMembers(guild) {
+  const total = guild.memberCount;
+  const ch = await guild.channels.fetch(CH_ALL).catch(() => null);
+  if (ch) ch.setName(`All Members: ${total}`).catch(() => {});
+}
+
+async function updateMembers(guild) {
+  await guild.members.fetch();
+  const count = guild.members.cache.filter(
+    m => !m.user.bot && !m.roles.cache.has(EXCLUDED_ROLE_ID)
+  ).size;
+  const ch = await guild.channels.fetch(CH_MEMBERS).catch(() => null);
+  if (ch) ch.setName(`Members: ${count}`).catch(() => {});
+}
+
+async function updateOnline(guild) {
+  const count = guild.members.cache.filter(
+    m => !m.user.bot &&
+         !m.roles.cache.has(EXCLUDED_ROLE_ID) &&
+         m.presence &&
+         m.presence.status !== "offline"
+  ).size;
+  const ch = await guild.channels.fetch(CH_ONLINE).catch(() => null);
+  if (ch) ch.setName(`Members Online: ${count}`).catch(() => {});
+}
+
+async function updateServerStatus(guild, active) {
+  const ch = await guild.channels.fetch(CH_SERVER).catch(() => null);
+  if (!ch) return;
+  const status = active ? "🟢 Active" : "🔴 Offline";
+  ch.setName(`Server: ${status}`).catch(() => {});
+}
+
+// === INITIAL SCAN ON READY ===
 client.once("ready", async () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-
   const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) return console.log("❌ Guild not found!");
+  if (!guild) return console.log("❌ Không tìm thấy GUILD_ID trong .env");
 
-  await guild.members.fetch(); // Quét 1 lần duy nhất khi khởi động
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  await guild.members.fetch();
 
-  console.log("📊 Initial scan complete!");
-  await updateAllCounts(guild);
-
-  setInterval(() => checkServerActivity(guild), 5 * 60 * 1000); // Mỗi 5 phút kiểm tra
+  await updateAllMembers(guild);
+  await updateMembers(guild);
+  await updateOnline(guild);
+  await updateServerStatus(guild, true);
 });
 
-// ========================
-// 🧮 COUNT UPDATE
-// ========================
-async function updateAllCounts(guild) {
-  try {
-    const members = guild.members.cache;
-    const allMembers = members.size;
-    const filteredMembers = members.filter(
-      m => !m.user.bot && !m.roles.cache.has(EXCLUDED_ROLE_ID)
-    );
+// === EVENT HANDLERS ===
 
-    const memberCount = filteredMembers.size;
-    const onlineCount = filteredMembers.filter(
-      m => m.presence && m.presence.status !== "offline"
-    ).size;
+// 🧩 MEMBER JOIN/REMOVE
+client.on(Events.GuildMemberAdd, async m => {
+  await updateAllMembers(m.guild);
+  await updateMembers(m.guild);
+});
 
-    const serverStatus = checkIfServerActive() ? "🟢 Active" : "🔴 Offline";
+client.on(Events.GuildMemberRemove, async m => {
+  await updateAllMembers(m.guild);
+  await updateMembers(m.guild);
+});
 
-    // Rename channels
-    await renameChannel(CH_ALL, `All Members: ${allMembers}`);
-    await renameChannel(CH_MEMBERS, `Members: ${memberCount}`);
-    await renameChannel(CH_ONLINE, `Online: ${onlineCount}`);
-    await renameChannel(CH_SERVER, `Server: ${serverStatus}`);
+// 🔄 PRESENCE UPDATE
+client.on(Events.PresenceUpdate, async (_, newPresence) => {
+  if (!newPresence?.guild) return;
+  await updateOnline(newPresence.guild);
+});
 
-    console.log(
-      `📈 Updated counts | All: ${allMembers}, Members: ${memberCount}, Online: ${onlineCount}, Status: ${serverStatus}`
-    );
-  } catch (err) {
-    console.error("❌ Error updating counts:", err);
-  }
-}
+// 💬 MONITOR CHANNEL ACTIVITY
+client.on(Events.MessageCreate, async msg => {
+  if (msg.channelId !== MONITOR_CHANNEL_ID || msg.author.bot) return;
 
-async function renameChannel(id, newName) {
-  try {
-    const ch = await client.channels.fetch(id);
-    if (ch && ch.name !== newName) await ch.setName(newName).catch(() => {});
-  } catch (err) {
-    console.error(`⚠️ Cannot rename channel ${id}:`, err.message);
-  }
-}
+  monitorCount++;
+  lastActive = Date.now();
 
-// ========================
-// 🕓 ACTIVITY CHECK
-// ========================
-function checkIfServerActive() {
-  const now = Date.now();
-  const oneHour = 60 * 60 * 1000;
-  const recentMsgs = messageLog.filter(msg => now - msg < oneHour);
-  return recentMsgs.length >= 5;
-}
-
-async function checkServerActivity(guild) {
-  await updateAllCounts(guild);
-  messageLog = messageLog.filter(ts => Date.now() - ts < 60 * 60 * 1000); // Giữ log 1h
-}
-
-// ========================
-// 🧏 EVENT LISTENERS
-// ========================
-
-// Khi có tin nhắn trong kênh theo dõi
-client.on("messageCreate", msg => {
-  if (msg.channelId === MONITOR_CHANNEL_ID && !msg.author.bot) {
-    messageLog.push(Date.now());
+  // Sau khi có ít nhất 5 tin nhắn → Server Active
+  if (monitorCount >= 5) {
+    monitorCount = 0;
+    await updateServerStatus(msg.guild, true);
   }
 });
 
-// Khi có người tham gia hoặc rời server
-client.on("guildMemberAdd", member => {
-  if (member.guild.id === GUILD_ID) updateAllCounts(member.guild);
-});
-client.on("guildMemberRemove", member => {
-  if (member.guild.id === GUILD_ID) updateAllCounts(member.guild);
-});
+// ⏱️ KIỂM TRA HOẠT ĐỘNG MỖI PHÚT
+setInterval(async () => {
+  const guild = client.guilds.cache.get(GUILD_ID);
+  if (!guild) return;
+  if (Date.now() - lastActive > 60 * 60 * 1000) {
+    await updateServerStatus(guild, false);
+  }
+}, 60 * 1000);
 
-// Khi có ai đó đổi trạng thái hoạt động
-client.on("presenceUpdate", (_, newPresence) => {
-  if (newPresence.guild.id === GUILD_ID) updateAllCounts(newPresence.guild);
-});
-
-// ========================
-// 🔑 LOGIN
-// ========================
+// === LOGIN ===
 client.login(TOKEN);
