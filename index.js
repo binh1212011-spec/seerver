@@ -2,12 +2,14 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
 require("dotenv").config();
 
+// ====== Keep Alive ======
 const app = express();
-app.get("/", (req, res) => res.send("Bot is alive!"));
+app.get("/", (req, res) => res.send("✅ Bot is alive"));
 app.listen(process.env.PORT || 3000, () =>
   console.log("🌐 Keep-alive server running")
 );
 
+// ====== Discord Client ======
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -20,6 +22,7 @@ const client = new Client({
 });
 
 const {
+  TOKEN,
   GUILD_ID,
   MONITOR_CHANNEL_ID,
   EXCLUDED_ROLE_ID,
@@ -29,24 +32,26 @@ const {
   CH_SERVER,
 } = process.env;
 
-let messageLog = [];
 let guild;
+let messageTimestamps = [];
 
-// ========== HÀM HỖ TRỢ ==========
+// ====== HÀM HỖ TRỢ ======
 async function safeRename(id, newName) {
-  try {
-    const ch = client.channels.cache.get(id);
-    if (ch && ch.name !== newName) {
+  const ch = client.channels.cache.get(id);
+  if (!ch) return;
+  if (ch.name !== newName) {
+    try {
       await ch.setName(newName);
-      console.log(`✅ Rename ${ch.id} → ${newName}`);
+      console.log(`🔄 Renamed: ${newName}`);
+    } catch (err) {
+      console.warn(`⚠️ Rename failed (${id}): ${err.message}`);
     }
-  } catch (e) {
-    console.warn(`⚠️ Rename fail for ${id}: ${e.message}`);
   }
 }
 
+// ----- Đếm -----
 function countAllMembers() {
-  return guild.members.cache.filter((m) => !m.user.bot).size;
+  return guild.memberCount; // ✅ tính cả bot
 }
 
 function countMembers() {
@@ -65,6 +70,7 @@ function countOnline() {
   ).size;
 }
 
+// ----- Update từng phần -----
 async function updateAllMembers() {
   await safeRename(CH_ALL, `╭All Members : ${countAllMembers()}`);
 }
@@ -79,44 +85,49 @@ async function updateOnline() {
 
 async function updateServer() {
   const now = Date.now();
-  messageLog = messageLog.filter((ts) => now - ts < 60 * 60 * 1000);
-  const active = messageLog.length >= 5 ? "Active" : "Offline";
+  messageTimestamps = messageTimestamps.filter((t) => now - t < 60 * 60 * 1000); // giữ tin nhắn 1h gần nhất
+  const active = messageTimestamps.length >= 5 ? "Active" : "Offline";
   await safeRename(CH_SERVER, `╰Server : ${active}`);
 }
 
-// ========== BOT READY ==========
+// ====== READY ======
 client.once("ready", async () => {
   guild = await client.guilds.fetch(GUILD_ID);
   await guild.members.fetch();
+  await client.channels.fetch(MONITOR_CHANNEL_ID);
   console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log("📦 Cached all members.");
 
-  // Quét ban đầu
-  await Promise.all([
-    updateAllMembers(),
-    updateMembers(),
-    updateOnline(),
-    updateServer(),
-  ]);
+  // Khởi tạo lần đầu
+  await updateAllMembers();
+  await updateMembers();
+  await updateOnline();
+  await updateServer();
 
-  console.log("🔄 Initial data loaded.");
+  console.log("📊 Initial stats updated.");
 });
 
-// ========== LẮNG NGHE ==========
+// ====== SỰ KIỆN ======
 client.on(Events.GuildMemberAdd, async () => {
-  await Promise.all([updateAllMembers(), updateMembers()]);
+  await updateAllMembers();
+  await updateMembers();
 });
+
 client.on(Events.GuildMemberRemove, async () => {
-  await Promise.all([updateAllMembers(), updateMembers(), updateOnline()]);
+  await updateAllMembers();
+  await updateMembers();
+  await updateOnline();
 });
+
 client.on(Events.PresenceUpdate, async () => {
   await updateOnline();
 });
+
 client.on(Events.MessageCreate, async (msg) => {
   if (msg.channelId === MONITOR_CHANNEL_ID && !msg.author.bot) {
-    messageLog.push(Date.now());
+    messageTimestamps.push(Date.now());
     await updateServer();
   }
 });
 
-client.login(process.env.TOKEN);
+// ====== LOGIN ======
+client.login(TOKEN);
