@@ -2,12 +2,12 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 require("dotenv").config();
 
-// ====== Keep Alive (chống bot ngủ) ======
+// ===== Keep Alive =====
 const app = express();
 app.get("/", (_, res) => res.send("✅ Bot is alive!"));
-app.listen(process.env.PORT || 3000, () => console.log("🌐 KeepAlive active"));
+app.listen(process.env.PORT || 3000, () => console.log("🌐 KeepAlive running"));
 
-// ====== Tạo client Discord ======
+// ===== Discord Client =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -18,7 +18,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ====== Đọc ENV ======
+// ===== ENV =====
 const {
   TOKEN,
   GUILD_ID,
@@ -32,10 +32,19 @@ const {
 let serverActive = false;
 let messageTimestamps = [];
 
-// ====== Hàm cập nhật tên kênh ======
+// ===== Hàm đổi tên kênh =====
+async function renameChannel(channel, newName) {
+  if (!channel || channel.name === newName) return;
+  try {
+    await channel.setName(newName);
+  } catch (err) {
+    console.log(`⚠️ Lỗi đổi tên ${channel.name}: ${err.message}`);
+  }
+}
+
+// ===== Hàm cập nhật số liệu =====
 async function updateChannels(guild) {
   try {
-    // Fetch 1 lần để đảm bảo cache đầy đủ
     await guild.members.fetch();
 
     const allMembers = guild.memberCount;
@@ -44,65 +53,50 @@ async function updateChannels(guild) {
     ).size;
 
     const chAll = guild.channels.cache.get(CH_ALL);
-    if (chAll)
-      await chAll
-        .setName(`╭All Members: ${allMembers}`)
-        .catch(() => console.log("⚠️ Không đổi được tên kênh All Members"));
-
     const chMembers = guild.channels.cache.get(CH_MEMBERS);
-    if (chMembers)
-      await chMembers
-        .setName(`┊Members: ${members}`)
-        .catch(() => console.log("⚠️ Không đổi được tên kênh Members"));
-
     const chServer = guild.channels.cache.get(CH_SERVER);
-    if (chServer)
-      await chServer
-        .setName(`╰Server: ${serverActive ? "🟢 Active" : "🔴 Offline"}`)
-        .catch(() => console.log("⚠️ Không đổi được tên kênh Server"));
+
+    await Promise.all([
+      renameChannel(chAll, `╭All Members: ${allMembers}`),
+      renameChannel(chMembers, `┊Members: ${members}`),
+      renameChannel(chServer, `╰Server: ${serverActive ? "🟢 Active" : "🔴 Offline"}`)
+    ]);
 
     console.log(
-      `✅ Channels updated → All:${allMembers}, Members:${members}, Server:${
-        serverActive ? "Active" : "Offline"
-      }`
+      `✅ Updated → All:${allMembers} | Members:${members} | Server:${serverActive ? "Active" : "Offline"}`
     );
   } catch (err) {
-    console.error("❌ Lỗi khi updateChannels:", err);
+    console.error("❌ updateChannels error:", err);
   }
 }
 
-// ====== Hàm kiểm tra hoạt động server ======
-function checkServerActivity(guild) {
+// ===== Cập nhật trạng thái server =====
+async function checkServerActivity(guild) {
   const now = Date.now();
-  // Lưu tin nhắn trong vòng 1 tiếng
+  // Giữ lại tin nhắn trong vòng 1h
   messageTimestamps = messageTimestamps.filter(ts => now - ts < 60 * 60 * 1000);
-  const active = messageTimestamps.length >= 5;
 
-  // Nếu trạng thái thay đổi thì cập nhật liền
+  const active = messageTimestamps.length >= 5;
   if (active !== serverActive) {
     serverActive = active;
-    console.log(
-      serverActive
-        ? "🟢 Server set to Active (5+ messages trong 1h)"
-        : "🔴 Server set to Offline (inactivity >1h)"
-    );
+    console.log(serverActive ? "🟢 Server is now ACTIVE" : "🔴 Server is now OFFLINE");
     updateChannels(guild);
   }
 }
 
-// ====== Khi bot sẵn sàng ======
+// ===== Khi bot khởi động =====
 client.once("ready", async () => {
   const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) return console.error("❌ Không tìm thấy server");
+  if (!guild) return console.log("❌ Không tìm thấy guild!");
 
   console.log(`🤖 Logged in as ${client.user.tag}`);
   await updateChannels(guild);
 
-  // Mỗi 10 phút kiểm tra xem server có inact >1h không
-  setInterval(() => checkServerActivity(guild), 10 * 60 * 1000);
+  // Kiểm tra trạng thái định kỳ (30s một lần)
+  setInterval(() => checkServerActivity(guild), 30 * 1000);
 });
 
-// ====== Khi member vào/ra ======
+// ===== Khi member join/leave =====
 client.on("guildMemberAdd", async member => {
   if (member.guild.id === GUILD_ID) await updateChannels(member.guild);
 });
@@ -110,13 +104,12 @@ client.on("guildMemberRemove", async member => {
   if (member.guild.id === GUILD_ID) await updateChannels(member.guild);
 });
 
-// ====== Khi có tin nhắn trong kênh theo dõi ======
+// ===== Khi có tin nhắn trong kênh theo dõi =====
 client.on("messageCreate", async msg => {
   if (msg.channelId !== MONITOR_CHANNEL_ID || msg.author.bot) return;
-  const guild = msg.guild;
   messageTimestamps.push(Date.now());
-  checkServerActivity(guild); // Kiểm tra ngay khi có tin mới
+  checkServerActivity(msg.guild);
 });
 
-// ====== Login ======
+// ===== Login =====
 client.login(TOKEN);
