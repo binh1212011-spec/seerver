@@ -28,9 +28,9 @@ async function updateCounters(online = true) {
     const total = guild.memberCount;
     const humans = guild.members.cache.filter(m => !m.user.bot).size;
 
-    await chAll.setName(`╭─ All Members: ${total}`).catch(() => {});
-    await chMembers.setName(`├─ Members: ${humans}`).catch(() => {});
-    await chServer.setName(`╰─ Server: ${online ? "🟢 Active" : "🔴 Offline"}`).catch(() => {});
+    await chAll.setName(`╭ All Members: ${total}`).catch(() => {});
+    await chMembers.setName(`┊ Members: ${humans}`).catch(() => {});
+    await chServer.setName(`╰ Server: ${online ? "🟢 Active" : "🔴 Offline"}`).catch(() => {});
 
     console.log(`✅ Cập nhật → Tổng: ${total}, Người: ${humans}, Trạng thái: ${online ? "Online" : "Offline"}`);
   } catch (err) {
