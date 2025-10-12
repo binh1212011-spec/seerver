@@ -1,238 +1,144 @@
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  Events,
+} = require("discord.js");
 const express = require("express");
-const fs = require("fs");
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
 require("dotenv").config();
 
-// ====== Keep Alive ======
-const app = express();
-app.get("/", (_, res) => res.send("✅ Bot is alive!"));
-app.listen(process.env.PORT || 3000, () => console.log("🌐 KeepAlive running"));
+const rules = require("./rules");
+const { renameChannel } = require("./functions/renameChannel");
+const { updateVoiceCounters } = require("./functions/updateCounters");
 
-// ====== Discord Client ======
+const {
+  TOKEN,
+  GUILD_ID,
+  CATEGORY_ID,
+  RULES_CHANNEL_ID,
+  ROLE_ID,
+  EXCLUDED_ROLE_ID,
+  PORT,
+} = process.env;
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildPresences,
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.GuildMember],
 });
 
-// ====== ENV ======
-const {
-  TOKEN,
-  GUILD_ID,
-  MONITOR_CHANNEL_ID,
-  EXCLUDED_ROLE_ID,
-  CH_ALL,
-  CH_MEMBERS,
-  CH_SERVER
-} = process.env;
-
-// ====== Role & Channel IDs ======
-const ROLE_PENALTY = "1417942514782044163";
-const ROLE_SPECIAL = "1426714744290541618";
-const CHANNEL_CHAT_LOCK = "1411034286429306940";
-const CATEGORY_HIDE = "1411034825699233943";
-const CHANNEL_STAFF_REPORT = "1411592559871922176";
-
-let serverActive = false;
-let messageTimestamps = [];
-const CACHE_FILE = "./violationCache.json";
-let violationCache = new Map();
-
-// ====== Load cache từ file ======
-function loadCache() {
-  try {
-    if (fs.existsSync(CACHE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-      violationCache = new Map(Object.entries(data));
-      console.log("📂 Cache loaded:", violationCache.size, "users");
-    }
-  } catch (err) {
-    console.error("❌ Error loading cache:", err);
-  }
-}
-
-// ====== Save cache ra file ======
-function saveCache() {
-  const data = Object.fromEntries(violationCache);
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2));
-}
-
-// ====== Hàm đổi tên nhanh ======
-async function renameChannel(channel, newName) {
-  if (!channel || channel.name === newName) return;
-  try {
-    await channel.setName(newName);
-    console.log(`🔁 Renamed: ${newName}`);
-  } catch (err) {
-    console.log(`⚠️ Rename error (${channel.name}): ${err.message}`);
-  }
-}
-
-// ====== Cập nhật thành viên ======
-async function updateMemberCounts(guild) {
-  await guild.members.fetch();
-
-  const allMembers = guild.memberCount;
-  const members = guild.members.cache.filter(
-    m => !m.user.bot && !m.roles.cache.has(EXCLUDED_ROLE_ID)
-  ).size;
-
-  const chAll = guild.channels.cache.get(CH_ALL);
-  const chMembers = guild.channels.cache.get(CH_MEMBERS);
-
-  await renameChannel(chAll, `╭All Members: ${allMembers}`);
-  await renameChannel(chMembers, `┊Members: ${members}`);
-}
-
-// ====== Cập nhật trạng thái server ======
-async function updateServerStatus(guild) {
-  const chServer = guild.channels.cache.get(CH_SERVER);
-  await renameChannel(chServer, `╰Server: ${serverActive ? "🟢 Active" : "🔴 Offline"}`);
-}
-
-// ====== Kiểm tra hoạt động server ======
-async function checkServerActivity(guild) {
-  const now = Date.now();
-  messageTimestamps = messageTimestamps.filter(ts => now - ts < 10 * 60 * 1000);
-
-  const active = messageTimestamps.length >= 5;
-  if (active !== serverActive) {
-    serverActive = active;
-    console.log(serverActive ? "🟢 Server ACTIVE" : "🔴 Server OFFLINE");
-    updateServerStatus(guild);
-  }
-}
-
-// ====== Lên lịch xóa role ======
-async function scheduleRoleRemoval(member, roleId, delay) {
-  setTimeout(async () => {
-    try {
-      if (member.roles.cache.has(roleId)) {
-        await member.roles.remove(roleId, "Hết thời gian phạt");
-        console.log(`✅ Gỡ role ${roleId} khỏi ${member.user.tag}`);
-      }
-      // Mở lại quyền chat / xem danh mục
-      await restorePermissions(member);
-    } catch (err) {
-      console.error(`❌ Lỗi khi xóa role ${roleId}:`, err);
-    }
-  }, delay);
-}
-
-// ====== Mở lại quyền ======
-async function restorePermissions(member) {
-  const guild = member.guild;
-  const chatChannel = guild.channels.cache.get(CHANNEL_CHAT_LOCK);
-  const category = guild.channels.cache.get(CATEGORY_HIDE);
-  await chatChannel.permissionOverwrites.delete(member.id).catch(() => {});
-  await category.permissionOverwrites.delete(member.id).catch(() => {});
-  console.log(`🔓 Đã mở lại quyền cho ${member.user.tag}`);
-}
-
-// ====== Xử lý phạt ======
-async function handlePenalty(member, isSpecial) {
-  const guild = member.guild;
-  const chatChannel = guild.channels.cache.get(CHANNEL_CHAT_LOCK);
-  const category = guild.channels.cache.get(CATEGORY_HIDE);
-
-  let record = violationCache.get(member.id)
-    ? JSON.parse(violationCache.get(member.id))
-    : { normal: 0, special: 0 };
-
-  if (isSpecial) {
-    record.special++;
-    violationCache.set(member.id, JSON.stringify(record));
-    saveCache();
-
-    if (record.special === 1) {
-      await scheduleRoleRemoval(member, ROLE_SPECIAL, 7 * 24 * 60 * 60 * 1000);
-      console.log(`⚠️ ${member.user.tag} (đặc biệt) lần 1 → 1 tuần`);
-    } else if (record.special === 2) {
-      await scheduleRoleRemoval(member, ROLE_SPECIAL, 7 * 24 * 60 * 60 * 1000);
-      const staffChannel = guild.channels.cache.get(CHANNEL_STAFF_REPORT);
-      if (staffChannel)
-        await staffChannel.send(`⚠️ ${member.user.tag} (đặc biệt) tái phạm lần 2 — báo staff.`);
-      console.log(`⚠️ ${member.user.tag} (đặc biệt) lần 2 → 1 tuần + báo staff`);
-    } else {
-      console.log(`🚫 ${member.user.tag} (đặc biệt) bị vô thời hạn`);
-    }
-    return;
-  }
-
-  // Bình thường
-  record.normal++;
-  violationCache.set(member.id, JSON.stringify(record));
-  saveCache();
-
-  await chatChannel.permissionOverwrites.edit(member.id, { SEND_MESSAGES: false });
-  await category.permissionOverwrites.edit(member.id, { VIEW_CHANNEL: false });
-  console.log(`🚫 ${member.user.tag} bị hạn chế (lần ${record.normal})`);
-
-  if (record.normal === 1) {
-    await scheduleRoleRemoval(member, ROLE_PENALTY, 24 * 60 * 60 * 1000); // 1 ngày
-  } else if (record.normal === 2) {
-    await scheduleRoleRemoval(member, ROLE_PENALTY, 7 * 24 * 60 * 60 * 1000); // 1 tuần
-  } else {
-    console.log(`🚫 ${member.user.tag} bị vô thời hạn`);
-  }
-}
-
-// ====== Ready ======
+// ====== READY ======
 client.once("ready", async () => {
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) return console.log("❌ Guild not found!");
+  console.log(`✅ Bot logged in as ${client.user.tag}`);
 
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-  loadCache();
+  // Cập nhật voice counter
+  await updateVoiceCounters(client);
 
-  await updateMemberCounts(guild);
-  await updateServerStatus(guild);
+  // Rename lại các channel trong CATEGORY_ID
+  client.channels.cache
+    .filter(ch => ch.parentId === CATEGORY_ID)
+    .forEach(ch => renameChannel(ch));
 
-  // Kiểm tra server activity mỗi 30s
-  setInterval(() => checkServerActivity(guild), 30 * 1000);
-});
+  // Gửi menu rules nếu chưa có
+  const channel = await client.channels.fetch(RULES_CHANNEL_ID);
+  if (!channel) return console.log("❌ Không tìm thấy kênh rules");
 
-// ====== Member join/leave ======
-client.on("guildMemberAdd", async member => {
-  if (member.guild.id === GUILD_ID) updateMemberCounts(member.guild);
-});
-client.on("guildMemberRemove", async member => {
-  if (member.guild.id === GUILD_ID) updateMemberCounts(member.guild);
-});
+  const messages = await channel.messages.fetch({ limit: 50 });
+  const alreadySent = messages.find(
+    m => m.author.id === client.user.id &&
+    m.components.length > 0 &&
+    m.components[0].components[0].customId === "rules_menu"
+  );
 
-// ====== Khi có thay đổi role ======
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  if (oldMember.roles.cache.size === newMember.roles.cache.size) return;
+  if (!alreadySent) {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("rules_menu")
+      .setPlaceholder("Select rules you would like to see")
+      .addOptions([
+        { label: "1 Warning Rules", value: "opt1", emoji: "<:x1Warn:1416316742384357396>" },
+        { label: "Channel Misuses", value: "opt2", emoji: "<:channelmisuse:1416316766312857610>" },
+        { label: "2 Warning Rules", value: "opt3", emoji: "<:x2Warn:1416316781060161556>" },
+        { label: "3 Warning Rules", value: "opt4", emoji: "<:x3Warn:1416316796029374464>" },
+        { label: "Instant Ban Rules", value: "opt5", emoji: "<:instantban:1416316818297192510>" },
+      ]);
 
-  const hadNormal = oldMember.roles.cache.has(ROLE_PENALTY);
-  const hasNormal = newMember.roles.cache.has(ROLE_PENALTY);
-  const hadSpecial = oldMember.roles.cache.has(ROLE_SPECIAL);
-  const hasSpecial = newMember.roles.cache.has(ROLE_SPECIAL);
+    const row = new ActionRowBuilder().addComponents(menu);
 
-  if (!hadNormal && hasNormal) {
-    await handlePenalty(newMember, false);
-  } else if (hadNormal && !hasNormal) {
-    await restorePermissions(newMember);
+    await channel.send({
+      content: "📜 **Server Rules are pinned here:**",
+      components: [row],
+    });
+
+    console.log("✅ Đã gửi menu rules mới.");
   }
+});
 
-  if (!hadSpecial && hasSpecial) {
-    await handlePenalty(newMember, true);
-  } else if (hadSpecial && !hasSpecial) {
-    await restorePermissions(newMember);
+// ====== CẬP NHẬT MEMBER COUNT ======
+client.on(Events.GuildMemberAdd, () => updateVoiceCounters(client));
+client.on(Events.GuildMemberRemove, () => updateVoiceCounters(client));
+client.on(Events.PresenceUpdate, () => updateVoiceCounters(client));
+
+// ====== AUTO ROLE LOGIC ======
+client.on("channelCreate", async (channel) => {
+  if (channel.parentId !== CATEGORY_ID) return;
+
+  await renameChannel(channel);
+
+  if (!channel.topic) return;
+  const match = channel.topic.match(/(\d{17,19})$/);
+  if (!match) return;
+
+  const userId = match[1];
+
+  try {
+    const member = await channel.guild.members.fetch(userId);
+    if (!member) return;
+
+    const mainRole = channel.guild.roles.cache.get(ROLE_ID);
+    const excludedRole = channel.guild.roles.cache.get(EXCLUDED_ROLE_ID);
+    if (!mainRole) return console.log("❌ ROLE_ID không tồn tại.");
+
+    // Nếu member có cả hai role → xóa excludedRole
+    if (member.roles.cache.has(mainRole.id) && member.roles.cache.has(excludedRole?.id)) {
+      await member.roles.remove(excludedRole).catch(() => {});
+      console.log(`🧹 Đã xóa role ${excludedRole?.name} khỏi ${member.user.tag}`);
+    }
+
+    // Nếu chưa có mainRole và không có excludedRole → thêm mainRole
+    if (!member.roles.cache.has(mainRole.id) && !member.roles.cache.has(excludedRole?.id)) {
+      await member.roles.add(mainRole);
+      console.log(`✅ Đã add role ${mainRole.name} cho ${member.user.tag}`);
+    }
+  } catch (err) {
+    console.error(`❌ Lỗi khi xử lý role cho ${userId}:`, err);
   }
 });
 
-// ====== Tin nhắn trong kênh theo dõi ======
-client.on("messageCreate", async msg => {
-  if (msg.channelId !== MONITOR_CHANNEL_ID || msg.author.bot) return;
-  const guild = msg.guild;
-  messageTimestamps.push(Date.now());
-  await checkServerActivity(guild);
+// ====== RULES MENU ======
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isStringSelectMenu() || interaction.customId !== "rules_menu") return;
+
+  const data = rules[interaction.values[0]];
+  if (!data) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(data.title)
+    .setDescription(data.desc)
+    .setColor(data.color)
+    .setImage(data.image);
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
 });
 
-// ====== Login ======
+// ====== KEEP ALIVE ======
+const app = express();
+app.get("/", (req, res) => res.send("✅ Bot is running!"));
+app.listen(PORT || 3000, () => console.log(`🌐 Server online on port ${PORT}`));
+
 client.login(TOKEN);
