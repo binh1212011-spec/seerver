@@ -1,8 +1,8 @@
 {
-  "name": "status-bot",
+  "name": "mix-bot",
   "version": "1.0.0",
+  "description": "Discord bot with rules menu, role auto, and voice counters",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
