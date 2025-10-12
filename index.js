@@ -1,47 +1,65 @@
-const {
-  Client,
-  GatewayIntentBits,
-  Partials
-} = require("discord.js");
 require("dotenv").config();
+const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
-const { updateVoiceCounters, initCounters } = require("./functions/updateCounters");
 
-// ==== CONFIG ====
-const TOKEN = process.env.TOKEN;
-const PORT = process.env.PORT || 3000;
-
-// ==== CLIENT ====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildPresences
+    GatewayIntentBits.GuildPresences,
   ],
-  partials: [Partials.User, Partials.GuildMember],
 });
 
-// ==== Khi bot bật ====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ====== Hàm cập nhật counter ======
+async function updateCounters(online = true) {
+  try {
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    await guild.members.fetch();
+
+    const chAll = guild.channels.cache.get(process.env.CH_ALL);
+    const chMembers = guild.channels.cache.get(process.env.CH_MEMBERS);
+    const chServer = guild.channels.cache.get(process.env.CH_SERVER);
+
+    if (!chAll || !chMembers || !chServer) return console.log("⚠️ Không tìm thấy channel");
+
+    const total = guild.memberCount;
+    const humans = guild.members.cache.filter(m => !m.user.bot).size;
+
+    await chAll.setName(`╭─ All Members: ${total}`).catch(() => {});
+    await chMembers.setName(`├─ Members: ${humans}`).catch(() => {});
+    await chServer.setName(`╰─ Server: ${online ? "🟢 Active" : "🔴 Offline"}`).catch(() => {});
+
+    console.log(`✅ Cập nhật → Tổng: ${total}, Người: ${humans}, Trạng thái: ${online ? "Online" : "Offline"}`);
+  } catch (err) {
+    console.error("❌ Lỗi cập nhật counter:", err);
+  }
+}
+
+// ====== Sự kiện ready ======
 client.once("ready", async () => {
   console.log(`✅ Bot đã đăng nhập: ${client.user.tag}`);
-
-  // ✅ Quét 1 lần toàn bộ để cập nhật counter
-  await initCounters(client);
-
-  // 🔁 Lắng nghe sự kiện để cập nhật realtime
-  client.on("guildMemberAdd", () => updateVoiceCounters(client));
-  client.on("guildMemberRemove", () => updateVoiceCounters(client));
-  client.on("presenceUpdate", () => updateVoiceCounters(client));
-
-  console.log("📊 Counter tracking started!");
+  await updateCounters(true);
+  setInterval(() => updateCounters(true), 5 * 60 * 1000); // 5 phút/lần
 });
 
-// ==== KEEP ALIVE SERVER ====
-const app = express();
-app.get("/", (req, res) => res.send("✅ Bot is running and alive!"));
-app.listen(PORT, () =>
-  console.log(`🌐 Keep-alive web server active on port ${PORT}`)
-);
+// ====== Keep Alive ======
+app.get("/", (req, res) => res.send("✅ Server Counter Bot is alive!"));
+app.listen(PORT, () => console.log(`🌐 Keep-alive chạy tại cổng ${PORT}`));
 
-// ==== LOGIN ====
-client.login(TOKEN);
+// ====== Khi tắt bot ======
+process.on("SIGINT", async () => {
+  await updateCounters(false);
+  console.log("🔴 Bot tắt, cập nhật trạng thái Offline.");
+  process.exit();
+});
+process.on("SIGTERM", async () => {
+  await updateCounters(false);
+  console.log("🔴 Bot tắt, cập nhật trạng thái Offline.");
+  process.exit();
+});
+
+// ====== Đăng nhập ======
+client.login(process.env.TOKEN);
