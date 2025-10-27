@@ -77,8 +77,21 @@ client.once("ready", async () => {
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
     await guild.members.fetch();
     console.log(`👥 Fetched ${guild.memberCount} members`);
+
+    // ====== Quét tất cả member khi bot ready ======
+    console.log("⚙️ Bắt đầu quét tất cả member theo ROLE_CATEGORY_MAP...");
+    for (const member of guild.members.cache.values()) {
+      if (member.user.bot) continue; // bỏ qua bot
+      const uniqueRoleIds = [...new Set(ROLE_CATEGORY_MAP.map(r => r.roleId))];
+      for (const roleId of uniqueRoleIds) {
+        const hasRole = member.roles.cache.has(roleId);
+        await handleRoleVisibility(member, roleId, hasRole);
+      }
+    }
+    console.log("✅ Hoàn tất quét tất cả member!");
+    
   } catch (err) {
-    console.error("❌ Lỗi fetch guild/members:", err);
+    console.error("❌ Lỗi fetch/quét guild/members:", err);
   }
 });
 
