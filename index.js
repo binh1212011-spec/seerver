@@ -12,7 +12,7 @@ const client = new Client({
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ====== Cấu hình role → category ======
+// ====== Role → Category ======
 const ROLE_CATEGORY_MAP = [
   { roleId: "1410990099042271352", categoryId: "1411043139728314478" },
   { roleId: "1410990099042271352", categoryId: "1411049289685270578" },
@@ -22,7 +22,7 @@ const ROLE_CATEGORY_MAP = [
 // Delay nhẹ tránh rate-limit
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
-// ====== Hàm xử lý visibility ======
+// ====== Handle visibility ======
 async function handleRoleVisibility(member, roleId, hasRole) {
   const guild = member.guild;
   const configs = ROLE_CATEGORY_MAP.filter(c => c.roleId === roleId);
@@ -38,13 +38,11 @@ async function handleRoleVisibility(member, roleId, hasRole) {
         const overwrite = channel.permissionOverwrites.cache.get(member.id);
 
         if (hasRole) {
-          // Có role → xóa overwrite member nếu có deny ViewChannel
           if (overwrite && overwrite.deny.has(PermissionFlagsBits.ViewChannel)) {
             await channel.permissionOverwrites.delete(member.id).catch(() => {});
             console.log(`✅ Mở channel ${channel.name} cho ${member.user.tag}`);
           }
         } else {
-          // Không role → deny ViewChannel member
           await channel.permissionOverwrites.edit(member.id, { ViewChannel: false }).catch(() => {});
           console.log(`🚫 Ẩn channel ${channel.name} cho ${member.user.tag}`);
         }
@@ -56,7 +54,7 @@ async function handleRoleVisibility(member, roleId, hasRole) {
   }
 }
 
-// ====== Event role thay đổi ======
+// ====== Event role change ======
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   const uniqueRoleIds = [...new Set(ROLE_CATEGORY_MAP.map(r => r.roleId))];
   const changed = uniqueRoleIds.filter(roleId => oldMember.roles.cache.has(roleId) !== newMember.roles.cache.has(roleId));
@@ -70,20 +68,17 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   }
 });
 
-// ====== Ready ======
+// ====== Ready event ======
 client.once("ready", async () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   try {
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
-
-    // ✅ Fetch tất cả members trước khi quét
     await guild.members.fetch();
     console.log(`👥 Fetched ${guild.memberCount} members`);
 
-    // ====== Quét tất cả member theo ROLE_CATEGORY_MAP ======
     console.log("⚙️ Bắt đầu quét tất cả member theo ROLE_CATEGORY_MAP...");
 
-    const members = guild.members.cache.filter(m => !m.user.bot); // loại bỏ bot
+    const members = guild.members.cache.filter(m => !m.user.bot);
     for (const member of members.values()) {
       const uniqueRoleIds = [...new Set(ROLE_CATEGORY_MAP.map(r => r.roleId))];
       for (const roleId of uniqueRoleIds) {
@@ -102,7 +97,12 @@ client.once("ready", async () => {
 app.get("/", (req, res) => res.send("✅ Bot is alive"));
 app.listen(PORT, () => console.log(`🌐 Keep-alive running on port ${PORT}`));
 
-// ====== Login bot ======
-client.login(process.env.TOKEN).catch(err => {
-  console.error("❌ Bot login failed:", err);
-});
+// ====== Login bot với debug token ======
+if (!process.env.TOKEN) {
+  console.error("❌ ERROR: TOKEN not found! Make sure it is set in Render environment variables.");
+} else {
+  console.log("🔑 TOKEN loaded ✅, attempting login...");
+  client.login(process.env.TOKEN).catch(err => {
+    console.error("❌ Bot login failed:", err);
+  });
+}
