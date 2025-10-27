@@ -20,12 +20,12 @@ const ROLE_CATEGORY_MAP = [
   { roleId: "1428899344010182756", categoryId: "1428927402444325024" },
 ];
 
-// ====== Hàm delay (chống rate limit) ======
+// ====== Delay nhẹ để giảm khả năng rate-limit (tùy chỉnh nếu cần) ======
 function delay(ms) {
-  return new Promise(res => setTimeout(res, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ====== Hàm cập nhật counter ======
+// ====== Cập nhật counter (tùy chọn giữ lại) ======
 async function updateCounters(online = true) {
   try {
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
@@ -54,105 +54,108 @@ async function updateCounters(online = true) {
   }
 }
 
-// ====== Hàm xử lý khi member có/không có role ======
-// hasRole = true  -> member có role => XÓA member override nếu có deny ViewChannel (mở xem)
-// hasRole = false -> member không có role => THÊM deny ViewChannel cho member (ẩn)
-async function handleRoleUpdate(member, roleId, hasRole) {
+// ====== Hàm chính: xử lý visibility cho 1 member & 1 role ======
+// hasRole === true  => member có role → XÓA member overwrite nếu có deny ViewChannel
+// hasRole === false => member không có role => THÊM/SET member overwrite ViewChannel: false (ẩn)
+async function handleRoleVisibilityForMember(member, roleId, hasRole) {
   const guild = member.guild;
   const configs = ROLE_CATEGORY_MAP.filter(c => c.roleId === roleId);
 
-  for (const config of configs) {
-    const category = guild.channels.cache.get(config.categoryId);
+  // lấy danh sách category tương ứng với role này
+  for (const cfg of configs) {
+    const category = guild.channels.cache.get(cfg.categoryId);
     if (!category) {
-      console.log(`⚠️ Không tìm thấy danh mục ${config.categoryId}`);
+      console.warn(`⚠️ Không tìm thấy category ID ${cfg.categoryId} (role ${roleId})`);
       continue;
     }
 
-    const roleName = guild.roles.cache.get(roleId)?.name || roleId;
-    const categoryName = category.name;
-    const actionText = hasRole ? "XÓA ẨN (MỞ VIEW)" : "CHẶN VIEW";
-
-    console.log(`\n👤 ${member.user.tag} | Role: ${roleName} | Category: ${categoryName} | Hành động: ${actionText}`);
-
+    // Lấy tất cả channel con trong category (không chỉnh category)
     const channels = [...category.children.cache.values()];
 
+    console.log(`\n👤 ${member.user.tag} | RoleID: ${roleId} | Category: ${category.name} | hasRole: ${hasRole}`);
     for (const channel of channels) {
       try {
-        const perms = channel.permissionOverwrites.cache.get(member.id);
+        // CHÚ Ý: chỉ thao tác với member overwrite, KHÔNG động tới role overwrite hay category overwrite
+        const memberOverwrite = channel.permissionOverwrites.cache.get(member.id);
 
         if (hasRole) {
-          // Có role -> remove override nếu có deny ViewChannel
-          if (perms && perms.deny.has(PermissionFlagsBits.ViewChannel)) {
-            await channel.permissionOverwrites.delete(member.id).catch(() => {});
-            console.log(`✅ Mở xem: ${channel.name}`);
+          // Member có role -> nếu có deny ViewChannel ở mức member thì xóa overwrite của member (restore inheritance)
+          if (memberOverwrite && memberOverwrite.deny.has(PermissionFlagsBits.ViewChannel)) {
+            await channel.permissionOverwrites.delete(member.id).catch(err => {
+              console.warn(`⚠️ Xóa overwrite thất bại cho ${channel.name}:`, err?.message || err);
+            });
+            console.log(`✅ Đã xóa overwrite (mở) cho ${channel.name}`);
+          } else {
+            // không có deny member -> không làm gì
           }
         } else {
-          // Không có role -> thêm deny (ẩn)
-          await channel.permissionOverwrites.edit(member.id, { ViewChannel: false }).catch(() => {});
-          console.log(`🚫 Ẩn: ${channel.name}`);
+          // Member không có role -> set deny ViewChannel cho member (ẩn riêng người đó)
+          await channel.permissionOverwrites.edit(member.id, { ViewChannel: false }).catch(err => {
+            console.warn(`⚠️ Set deny thất bại cho ${channel.name}:`, err?.message || err);
+          });
+          console.log(`🚫 Đã đặt deny ViewChannel cho ${channel.name}`);
         }
 
-        // Delay nhẹ giữa từng chỉnh để giảm khả năng rate-limit
-        await delay(250);
+        // Delay nhẹ giữa các chỉnh sửa (tùy chỉnh nếu cần)
+        await delay(200);
       } catch (err) {
-        console.log(`⚠️ Lỗi chỉnh quyền kênh ${channel.name}:`, err?.message || err);
+        console.error(`❌ Lỗi khi xử lý kênh ${channel.name}:`, err);
       }
-    }
+    } // end for channels
 
-    console.log(`✅ Hoàn tất ${actionText.toLowerCase()} trong "${categoryName}" (${channels.length} kênh)`);
-  }
+    console.log(`✅ Hoàn tất xử lý category "${category.name}" (${channels.length} kênh) cho member ${member.user.tag}`);
+  } // end for configs
 }
 
-// ====== Event: Khi role thay đổi (guildMemberUpdate) ======
+// ====== Event: phát hiện role thay đổi trên member ======
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   try {
+    // đảm bảo cache roles
     const oldRoles = oldMember.roles.cache;
     const newRoles = newMember.roles.cache;
 
-    // Lọc các role trong map mà có thay đổi (added or removed)
-    const changed = ROLE_CATEGORY_MAP
-      .map(c => c.roleId)
-      .filter((v, i, a) => a.indexOf(v) === i) // unique roleIds
-      .filter(roleId => oldRoles.has(roleId) !== newRoles.has(roleId));
+    // Lấy tất cả roleId duy nhất trong map, kiểm tra role nào thay đổi
+    const uniqueRoleIds = [...new Set(ROLE_CATEGORY_MAP.map(r => r.roleId))];
 
+    // role nào có thay đổi trạng thái giữa old vs new -> xử lý
+    const changed = uniqueRoleIds.filter(roleId => oldRoles.has(roleId) !== newRoles.has(roleId));
     if (changed.length === 0) return;
 
-    console.log(`\n⚙️ Phát hiện thay đổi role ở ${newMember.user.tag}:`, changed);
-    // Xử lý từng role thay đổi (mỗi role có thể map tới nhiều category)
+    console.log(`\n⚙️ Phát hiện thay đổi role cho ${newMember.user.tag}:`, changed);
+
+    // xử lý từng role thay đổi (mỗi role có thể map tới nhiều category)
     for (const roleId of changed) {
       const hasRole = newRoles.has(roleId);
-      await handleRoleUpdate(newMember, roleId, hasRole);
+      // gọi hàm xử lý chính
+      await handleRoleVisibilityForMember(newMember, roleId, hasRole);
     }
   } catch (err) {
     console.error("❌ Lỗi trong guildMemberUpdate handler:", err);
   }
 });
 
-// ====== Khi bot online ======
+// ====== Ready: cập nhật counter (nếu bạn dùng) ======
 client.once("ready", async () => {
   console.log(`✅ Bot đã đăng nhập: ${client.user.tag}`);
 
-  // Cập nhật counter ngay khi ready
+  // cập nhật counter khi start
   await updateCounters(true);
-
-  // Lặp cập nhật counter mỗi 5 phút
+  // đặt interval nếu muốn
   setInterval(() => updateCounters(true), 5 * 60 * 1000);
 });
 
-// ====== Keep Alive (simple web ping) ======
-app.get("/", (req, res) => res.send("✅ Server Counter + Role Visibility Bot is alive!"));
-app.listen(PORT, () => console.log(`🌐 Keep-alive chạy tại cổng ${PORT}`));
+// ====== Keep-alive web endpoint ======
+app.get("/", (req, res) => res.send("✅ Bot is alive"));
+app.listen(PORT, () => console.log(`🌐 Keep-alive chạy cổng ${PORT}`));
 
-// ====== Shutdown handlers (cập nhật trạng thái offline trước khi exit) ======
+// ====== Shutdown xử lý ======
 async function shutdown() {
-  try {
-    await updateCounters(false);
-  } catch (e) { /* ignore */ }
-  console.log("🔴 Bot tắt, cập nhật trạng thái Offline.");
+  try { await updateCounters(false); } catch (e) {}
+  console.log("🔴 Bot tắt");
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// ====== Đăng nhập ======
+// ====== Login ======
 client.login(process.env.TOKEN);
