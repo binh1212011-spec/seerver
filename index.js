@@ -221,10 +221,10 @@ app.listen(PORT, () => console.log(`🌐 Keep-alive running on port ${PORT}`));
 
 // ====== AUTO RESTART THEO CHU KỲ ======
 // 🕒 Đặt số giờ bot tự khởi động lại (ví dụ: 6 = mỗi 6 tiếng)
-const RESTART_INTERVAL_HOURS = 6;
+const RESTART_INTERVAL_HOURS = 24;
 
 // Chuyển sang mili giây để setInterval chạy đúng
-const RESTART_INTERVAL = RESTART_INTERVAL_HOURS * 60 * 60 * 1000;
+const RESTART_INTERVAL = RESTART_INTERVAL_HOURS * 60 * 60 * 24;
 
 // In log để biết bot đang đếm giờ restart
 console.log(`🕒 Bot sẽ tự khởi động lại sau ${RESTART_INTERVAL_HOURS} tiếng.`);
