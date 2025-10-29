@@ -219,6 +219,22 @@ client.once("ready", async () => {
 app.get("/", (req, res) => res.send("✅ Bot is alive"));
 app.listen(PORT, () => console.log(`🌐 Keep-alive running on port ${PORT}`));
 
+// ====== AUTO RESTART THEO CHU KỲ ======
+// 🕒 Đặt số giờ bot tự khởi động lại (ví dụ: 6 = mỗi 6 tiếng)
+const RESTART_INTERVAL_HOURS = 6;
+
+// Chuyển sang mili giây để setInterval chạy đúng
+const RESTART_INTERVAL = RESTART_INTERVAL_HOURS * 60 * 60 * 1000;
+
+// In log để biết bot đang đếm giờ restart
+console.log(`🕒 Bot sẽ tự khởi động lại sau ${RESTART_INTERVAL_HOURS} tiếng.`);
+
+// Bắt đầu bộ đếm
+setInterval(() => {
+  console.log(`♻️ Auto-Restart: Đã đến ${RESTART_INTERVAL_HOURS} tiếng, bot sẽ khởi động lại...`);
+  process.exit(0); // Render sẽ tự restart container ngay sau khi process kết thúc
+}, RESTART_INTERVAL);
+
 // ====== Graceful signals: chỉ update counter chứ không exit ======
 process.on("SIGINT", async () => {
   console.log("⚠️ Received SIGINT - updating counter to Offline (no exit).");
